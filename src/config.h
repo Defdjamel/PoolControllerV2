@@ -29,7 +29,7 @@ static const char TZ_INFO[]    = "CET-1CEST,M3.5.0,M10.5.0/3";  // Europe/Paris
 static const char NTP_SERVER[] = "pool.ntp.org";
 
 // ======================= OTA =======================
-#define FIRMWARE_VERSION  "1.0.7"
+#define FIRMWARE_VERSION  "1.0.8"
 #define OTA_VERSION_URL   "https://raw.githubusercontent.com/Defdjamel/PoolControllerV2/main/firmware/version.json"
 
 // ======================= BLYNK : virtual pins =======================
