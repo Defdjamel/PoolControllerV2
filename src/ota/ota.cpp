@@ -6,12 +6,17 @@
 #include "ota/ota.h"
 #include "config.h"
 
-// Extrait la valeur d'une cle dans un JSON plat  {"key":"value",...}
+// Extrait la valeur d'une cle dans un JSON plat, avec ou sans espaces autour de ':'
 static bool jsonGet(const String &body, const char *key, char *out, size_t n) {
-    String pat = String('"') + key + "\":\"";
+    String pat = String('"') + key + '"';
     int pos = body.indexOf(pat);
     if (pos < 0) return false;
     pos += pat.length();
+    // sauter espaces et ':'
+    while (pos < (int)body.length() && (body[pos] == ' ' || body[pos] == ':')) pos++;
+    // doit tomber sur le '"' ouvrant de la valeur
+    if (pos >= (int)body.length() || body[pos] != '"') return false;
+    pos++;
     int end = body.indexOf('"', pos);
     if (end < 0) return false;
     strlcpy(out, body.substring(pos, end).c_str(), n);
@@ -49,7 +54,7 @@ void ota_check() {
     char remoteVer[16] = "", firmwareUrl[256] = "";
     if (!jsonGet(body, "version", remoteVer, sizeof(remoteVer)) ||
         !jsonGet(body, "url",     firmwareUrl, sizeof(firmwareUrl))) {
-        Serial.println("[OTA] version.json invalide");
+        Serial.printf("[OTA] version.json invalide : %s\n", body.c_str());
         return;
     }
 
