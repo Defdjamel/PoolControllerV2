@@ -38,15 +38,16 @@ void ota_check() {
     WiFiClientSecure client;
     client.setInsecure();   // HTTPS sans validation du cert (RAM limitee)
 
-    // Parametre aleatoire pour contourner le cache CDN de raw.githubusercontent.com
-    String versionUrl = String(OTA_VERSION_URL) + "?t=" + String(millis());
-
     HTTPClient http;
-    http.addHeader("Cache-Control", "no-cache, no-store");
-    if (!http.begin(client, versionUrl)) {
+    if (!http.begin(client, OTA_VERSION_URL)) {
         Serial.println("[OTA] URL invalide");
         return;
     }
+    // API GitHub "contents" : "Accept: raw" renvoie le fichier brut, toujours
+    // frais. Un User-Agent est requis par l'API. (Les en-tetes doivent etre
+    // ajoutes APRES begin().)
+    http.addHeader("Accept", "application/vnd.github.raw");
+    http.addHeader("User-Agent", "PoolControllerV2-OTA");
     int code = http.GET();
     String body = http.getString();
     http.end();

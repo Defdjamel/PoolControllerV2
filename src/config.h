@@ -29,8 +29,11 @@ static const char TZ_INFO[]    = "CET-1CEST,M3.5.0,M10.5.0/3";  // Europe/Paris
 static const char NTP_SERVER[] = "pool.ntp.org";
 
 // ======================= OTA =======================
-#define FIRMWARE_VERSION  "1.0.9"
-#define OTA_VERSION_URL   "https://raw.githubusercontent.com/Defdjamel/PoolControllerV2/main/firmware/version.json"
+// On interroge l'API "contents" de GitHub (et non raw.githubusercontent.com) :
+// le CDN raw sert un cache de ~5 min qui IGNORE le parametre "?t=", alors que
+// l'API renvoie toujours le contenu frais (en-tete Accept: application/vnd.github.raw).
+#define FIRMWARE_VERSION  "1.0.10"
+#define OTA_VERSION_URL   "https://api.github.com/repos/Defdjamel/PoolControllerV2/contents/firmware/version.json"
 
 // ======================= BLYNK : virtual pins =======================
 #define VPIN_DOSAGE    V0   // dosage cible ml/h          (app <-> appareil)
