@@ -99,6 +99,10 @@ static void buildStatusBar(lv_obj_t *scr) {
   lv_obj_align(sb_clock, LV_ALIGN_RIGHT_MID, -8, 0);
   sb_wifi = mkLabel(sb, LV_SYMBOL_WIFI, &lv_font_montserrat_14, C_MUTED);
   lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -46, 0);
+
+  // Version du firmware (fixe : ne change pas a l'execution)
+  lv_obj_t *sb_ver = mkLabel(sb, "v" FIRMWARE_VERSION, &lv_font_montserrat_12, C_MUTED);
+  lv_obj_align(sb_ver, LV_ALIGN_CENTER, 0, 0);
 }
 
 // ======================= Navigation =======================

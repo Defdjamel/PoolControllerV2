@@ -32,7 +32,7 @@ static const char NTP_SERVER[] = "pool.ntp.org";
 // On interroge l'API "contents" de GitHub (et non raw.githubusercontent.com) :
 // le CDN raw sert un cache de ~5 min qui IGNORE le parametre "?t=", alors que
 // l'API renvoie toujours le contenu frais (en-tete Accept: application/vnd.github.raw).
-#define FIRMWARE_VERSION  "1.0.10"
+#define FIRMWARE_VERSION  "1.0.11"
 #define OTA_VERSION_URL   "https://api.github.com/repos/Defdjamel/PoolControllerV2/contents/firmware/version.json"
 
 // ======================= BLYNK : virtual pins =======================
