@@ -32,6 +32,13 @@ static lv_obj_t *wifi_overlay;
 static lv_obj_t *lbl_ov_ssid;
 static lv_obj_t *ta_pwd;
 static lv_obj_t *lv_kbd;
+// Overlay OTA
+static lv_obj_t *ota_overlay;
+static lv_obj_t *lbl_ota_ver;
+static lv_obj_t *bar_ota;
+static lv_obj_t *lbl_ota_pct;
+static lv_obj_t *lbl_ota_err;
+
 static bool      scan_triggered = false;
 static uint32_t  scan_start_ms  = 0;
 static char      pending_ssid[64];
@@ -310,7 +317,8 @@ static void buildWifiTab(lv_obj_t *tab) {
   lv_obj_center(ld);
 }
 
-static void buildWifiOverlay();  // declaration anticipee (definie apres buildUi)
+static void buildWifiOverlay();
+static void buildOtaOverlay();  // declaration anticipee (definie apres buildUi)
 
 static void buildUi() {
   tabview = lv_tabview_create(lv_scr_act(), LV_DIR_LEFT, 74);
@@ -322,6 +330,74 @@ static void buildUi() {
   lv_obj_add_event_cb(tabview, cb_tab_changed, LV_EVENT_VALUE_CHANGED, NULL);
   lv_tabview_set_act(tabview, TAB_HOME, LV_ANIM_OFF);
   buildWifiOverlay();
+  buildOtaOverlay();
+}
+
+// ======================= OTA overlay =======================
+void ui_otaBegin(const char *version) {
+  lv_label_set_text_fmt(lbl_ota_ver, "Installation de v%s", version);
+  lv_bar_set_value(bar_ota, 0, LV_ANIM_OFF);
+  lv_label_set_text(lbl_ota_pct, "0 %");
+  lv_label_set_text(lbl_ota_err, "");
+  lv_obj_clear_flag(ota_overlay, LV_OBJ_FLAG_HIDDEN);
+  lv_timer_handler();
+}
+
+void ui_otaProgress(int pct) {
+  lv_bar_set_value(bar_ota, pct, LV_ANIM_OFF);
+  lv_label_set_text_fmt(lbl_ota_pct, "%d %%", pct);
+  lv_timer_handler();
+}
+
+void ui_otaError(const char *msg) {
+  lv_label_set_text(lbl_ota_err, msg);
+  lv_timer_handler();
+}
+
+static void buildOtaOverlay() {
+  ota_overlay = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(ota_overlay, 320, 240);
+  lv_obj_set_pos(ota_overlay, 0, 0);
+  lv_obj_set_style_bg_color(ota_overlay, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(ota_overlay, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(ota_overlay, 0, 0);
+  lv_obj_clear_flag(ota_overlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ota_overlay, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t *title = lv_label_create(ota_overlay);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_label_set_text(title, LV_SYMBOL_DOWNLOAD " Mise a jour");
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
+
+  lbl_ota_ver = lv_label_create(ota_overlay);
+  lv_obj_set_style_text_font(lbl_ota_ver, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(lbl_ota_ver, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
+  lv_label_set_text(lbl_ota_ver, "");
+  lv_obj_align(lbl_ota_ver, LV_ALIGN_TOP_MID, 0, 66);
+
+  bar_ota = lv_bar_create(ota_overlay);
+  lv_obj_set_size(bar_ota, 280, 22);
+  lv_bar_set_range(bar_ota, 0, 100);
+  lv_bar_set_value(bar_ota, 0, LV_ANIM_OFF);
+  lv_obj_align(bar_ota, LV_ALIGN_CENTER, 0, -10);
+
+  lbl_ota_pct = lv_label_create(ota_overlay);
+  lv_obj_set_style_text_color(lbl_ota_pct, lv_color_white(), 0);
+  lv_label_set_text(lbl_ota_pct, "0 %");
+  lv_obj_align(lbl_ota_pct, LV_ALIGN_CENTER, 0, 22);
+
+  lbl_ota_err = lv_label_create(ota_overlay);
+  lv_obj_set_style_text_font(lbl_ota_err, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl_ota_err, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_label_set_text(lbl_ota_err, "");
+  lv_obj_align(lbl_ota_err, LV_ALIGN_BOTTOM_MID, 0, -36);
+
+  lv_obj_t *warn = lv_label_create(ota_overlay);
+  lv_obj_set_style_text_font(warn, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(warn, lv_palette_main(LV_PALETTE_ORANGE), 0);
+  lv_label_set_text(warn, LV_SYMBOL_WARNING " Ne pas couper l'alimentation");
+  lv_obj_align(warn, LV_ALIGN_BOTTOM_MID, 0, -12);
 }
 
 static void buildWifiOverlay() {

@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include "ota/ota.h"
+#include "ui/ui.h"
 #include "config.h"
 
 // Extrait la valeur d'une cle dans un JSON plat, avec ou sans espaces autour de ':'
@@ -69,6 +70,16 @@ void ota_check() {
     }
 
     Serial.printf("[OTA] mise a jour vers %s ...\n", remoteVer);
+
+    // Afficher l'ecran de mise a jour
+    String ver(remoteVer);
+    ui_otaBegin(ver.c_str());
+
+    // Callbacks pour la barre de progression
+    httpUpdate.onProgress([](int cur, int total) {
+        if (total > 0) ui_otaProgress(cur * 100 / total);
+    });
+
     WiFiClientSecure fwClient;
     fwClient.setInsecure();
 
@@ -77,7 +88,9 @@ void ota_check() {
     t_httpUpdate_return ret = httpUpdate.update(fwClient, firmwareUrl);
     // En cas de succes, httpUpdate redemarre automatiquement — on n'arrive pas ici.
     if (ret == HTTP_UPDATE_FAILED) {
-        Serial.printf("[OTA] echec : %s\n", httpUpdate.getLastErrorString().c_str());
+        String err = httpUpdate.getLastErrorString();
+        Serial.printf("[OTA] echec : %s\n", err.c_str());
+        ui_otaError(err.c_str());
     }
 }
 
