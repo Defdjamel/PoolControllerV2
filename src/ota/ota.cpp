@@ -73,6 +73,7 @@ void ota_check() {
     fwClient.setInsecure();
 
     httpUpdate.rebootOnUpdate(true);
+    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     t_httpUpdate_return ret = httpUpdate.update(fwClient, firmwareUrl);
     // En cas de succes, httpUpdate redemarre automatiquement — on n'arrive pas ici.
     if (ret == HTTP_UPDATE_FAILED) {
