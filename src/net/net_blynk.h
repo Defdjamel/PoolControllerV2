@@ -17,6 +17,7 @@ void net_wifiIP(char *buf, size_t n);
 void net_publishDosage(float mlPerHour);
 void net_publishVolumes(float last, float today, float total);
 void net_publishVolumeDay(float today);
+void net_publishTank(float percent);    // niveau restant de la cuve (%)
 
 // Configuration WiFi persistee en NVS.
 void net_connectTo(const char *ssid, const char *pass); // sauvegarde + reconnecte

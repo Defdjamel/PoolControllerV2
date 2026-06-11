@@ -14,6 +14,9 @@ static lv_obj_t *wifi_conn_card, *wifi_conn_ssid, *wifi_conn_ip;
 static lv_obj_t *wifi_list, *wifi_scan_st;
 // Overlay mot de passe
 static lv_obj_t *wifi_overlay, *lbl_ov_ssid, *ta_pwd, *lv_kbd;
+// Cuve
+static lv_obj_t *tank_pct_lbl, *tank_bar, *tank_cap_lbl;
+static const int TANK_STEP_L = 5;   // pas du reglage de capacite (litres)
 
 static bool      scan_triggered = false;
 static uint32_t  scan_start_ms  = 0;
@@ -231,6 +234,62 @@ static void buildCalib(lv_obj_t *p) {
   lv_obj_add_event_cb(cal_btn, cb_calib_action, LV_EVENT_CLICKED, NULL);
 }
 
+// ======================= Sous-onglet Cuve =======================
+static void refreshTank() {
+  float pct = doser_getTankPercent();
+  lv_color_t c = (pct <= 15.0f) ? C_RED : (pct <= 35.0f) ? C_AMBER : C_GREEN;
+  lv_label_set_text_fmt(tank_pct_lbl, "%.0f %%", pct);
+  lv_obj_set_style_text_color(tank_pct_lbl, c, 0);
+  lv_bar_set_value(tank_bar, (int)(pct + 0.5f), LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(tank_bar, c, LV_PART_INDICATOR);
+  lv_label_set_text_fmt(tank_cap_lbl, "Capacite : %.0f L", doser_getTankCapacityL());
+}
+
+static void cb_tank_cap(lv_event_t *e) {
+  int d = (int)(intptr_t)lv_event_get_user_data(e);
+  doser_setTankCapacityL(doser_getTankCapacityL() + d);   // borne dans le doseur
+  refreshTank();
+}
+static void cb_tank_refill(lv_event_t *) {
+  doser_refillTank();
+  refreshTank();
+  showToast("Cuve remplie");
+}
+
+static void buildTank(lv_obj_t *p) {
+  mkLabel(p, "NIVEAU DE LA CUVE", &lv_font_montserrat_12, C_MUTED);
+
+  tank_pct_lbl = mkLabel(p, "100 %", &lv_font_montserrat_28, C_GREEN);
+  lv_obj_align(tank_pct_lbl, LV_ALIGN_TOP_MID, 0, 26);
+
+  tank_bar = lv_bar_create(p);
+  lv_obj_set_size(tank_bar, PW - 40, 10);
+  lv_obj_align(tank_bar, LV_ALIGN_TOP_MID, 0, 66);
+  lv_obj_set_style_bg_color(tank_bar, C_SURFACE2, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(tank_bar, C_GREEN, LV_PART_INDICATOR);
+  lv_bar_set_range(tank_bar, 0, 100);
+
+  tank_cap_lbl = mkLabel(p, "Capacite : 20 L", &lv_font_montserrat_14, C_TEXT);
+  lv_obj_align(tank_cap_lbl, LV_ALIGN_TOP_MID, 0, 94);
+
+  lv_obj_t *minus = mkBtn(p, "-", C_SURFACE2, C_ACCENT, NULL);
+  lv_obj_set_size(minus, 42, 32);
+  lv_obj_align(minus, LV_ALIGN_TOP_LEFT, 8, 118);
+  lv_obj_add_event_cb(minus, cb_tank_cap, LV_EVENT_CLICKED, (void *)(intptr_t)(-TANK_STEP_L));
+
+  lv_obj_t *plus = mkBtn(p, "+", C_SURFACE2, C_ACCENT, NULL);
+  lv_obj_set_size(plus, 42, 32);
+  lv_obj_align(plus, LV_ALIGN_TOP_RIGHT, -8, 118);
+  lv_obj_add_event_cb(plus, cb_tank_cap, LV_EVENT_CLICKED, (void *)(intptr_t)(TANK_STEP_L));
+
+  lv_obj_t *rf = mkBtn(p, LV_SYMBOL_REFRESH "  CUVE REMPLIE", C_GREEN, lv_color_hex(0x063226), NULL);
+  lv_obj_set_size(rf, PW - 24, 36);
+  lv_obj_align(rf, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_add_event_cb(rf, cb_tank_refill, LV_EVENT_CLICKED, NULL);
+
+  refreshTank();
+}
+
 // ======================= Onglet Reglages =======================
 void buildSettings(lv_obj_t *p) {
   lv_obj_set_style_pad_all(p, 0, 0);
@@ -248,15 +307,20 @@ void buildSettings(lv_obj_t *p) {
 
   lv_obj_t *tw = lv_tabview_add_tab(settings_tv, "WiFi");
   lv_obj_t *tp = lv_tabview_add_tab(settings_tv, "Pompe");
+  lv_obj_t *tc = lv_tabview_add_tab(settings_tv, "Cuve");
   lv_obj_clear_flag(tw, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_clear_flag(tp, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(tc, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_pad_all(tw, 6, 0);
   lv_obj_set_style_pad_all(tp, 6, 0);
+  lv_obj_set_style_pad_all(tc, 6, 0);
   lv_obj_set_style_bg_color(tw, C_BG, 0);
   lv_obj_set_style_bg_color(tp, C_BG, 0);
+  lv_obj_set_style_bg_color(tc, C_BG, 0);
 
   buildWifi(tw);
   buildCalib(tp);
+  buildTank(tc);
   lv_obj_add_event_cb(settings_tv, cb_settings_sub, LV_EVENT_VALUE_CHANGED, NULL);
 
   buildWifiOverlay();
@@ -287,6 +351,7 @@ void syncSettings(bool inSettings) {
 void ui_settingsTick() {
   uint16_t sub = lv_tabview_get_tab_act(settings_tv);
   if (sub == SUB_PUMP && doser_calibState() == CAL_RUNNING) calibRefresh();
+  if (sub == SUB_TANK) refreshTank();
   if (sub == SUB_WIFI) {
     refreshWifi();
     if (scan_triggered) {

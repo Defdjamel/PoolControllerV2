@@ -34,7 +34,7 @@ static const int PW   = SCREEN_WIDTH;                  // 240
 static const int PH   = SCREEN_HEIGHT - SB_H - TB_H;   // 254
 
 enum { T_HOME = 0, T_FLOW, T_SETTINGS, T_HIST, N_TABS };
-enum { SUB_WIFI = 0, SUB_PUMP };
+enum { SUB_WIFI = 0, SUB_PUMP, SUB_TANK };
 static const int FLOW_STEP = 5;
 
 // ======================= Helpers de style (ui_widgets.cpp) =======================

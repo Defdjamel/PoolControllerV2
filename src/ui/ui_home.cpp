@@ -5,7 +5,7 @@
 #include "ui/ui_internal.h"
 
 static lv_obj_t *home_pill, *home_pill_dot, *home_pill_lbl;
-static lv_obj_t *home_flow, *home_unit, *home_today, *home_total, *home_next, *home_bar;
+static lv_obj_t *home_flow, *home_unit, *home_today, *home_tank, *home_tank_bar, *home_next, *home_bar;
 
 // ======================= Rafraichissement =======================
 void refreshHome() {
@@ -19,9 +19,12 @@ void refreshHome() {
   lv_obj_align_to(home_unit, home_flow, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -3);
   lv_label_set_text_fmt(home_today, "%.0f ml", doser_getVolumeToday());
 
-  float tot = doser_getVolumeTotal();
-  if (tot >= 1000.0f) lv_label_set_text_fmt(home_total, "%.2f L", tot / 1000.0f);
-  else                lv_label_set_text_fmt(home_total, "%.0f ml", tot);
+  float pct = doser_getTankPercent();
+  lv_color_t tankCol = (pct <= 15.0f) ? C_RED : (pct <= 35.0f) ? C_AMBER : C_GREEN;
+  lv_label_set_text_fmt(home_tank, "%.0f %%", pct);
+  lv_obj_set_style_text_color(home_tank, tankCol, 0);
+  lv_bar_set_value(home_tank_bar, (int)(pct + 0.5f), LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(home_tank_bar, tankCol, LV_PART_INDICATOR);
 
   if (doser_getFlow() <= 0.0f) {
     lv_label_set_text(home_next, "Calibrez la pompe");
@@ -97,9 +100,20 @@ void buildHome(lv_obj_t *p) {
   lv_obj_align(home_today, LV_ALIGN_BOTTOM_LEFT, 0, 2);
 
   lv_obj_t *c2 = mkCard(p, 8 + (PW - 22) / 2 + 6, 98, (PW - 22) / 2, 46);
-  mkLabel(c2, "TOTAL CUMULE", &lv_font_montserrat_12, C_MUTED);
-  home_total = mkLabel(c2, "0 ml", &lv_font_montserrat_16, C_GREEN);
-  lv_obj_align(home_total, LV_ALIGN_BOTTOM_LEFT, 0, 2);
+  mkLabel(c2, "NIVEAU CUVE", &lv_font_montserrat_12, C_MUTED);
+  home_tank = mkLabel(c2, "100 %", &lv_font_montserrat_16, C_GREEN);
+  lv_obj_align(home_tank, LV_ALIGN_BOTTOM_LEFT, 0, 2);
+  // Mini-jauge verticale facon reservoir (se remplit du bas)
+  home_tank_bar = lv_bar_create(c2);
+  lv_obj_set_size(home_tank_bar, 11, 28);
+  lv_obj_align(home_tank_bar, LV_ALIGN_RIGHT_MID, 2, 0);
+  lv_obj_set_style_radius(home_tank_bar, 3, LV_PART_MAIN);
+  lv_obj_set_style_radius(home_tank_bar, 3, LV_PART_INDICATOR);
+  lv_obj_set_style_border_width(home_tank_bar, 1, LV_PART_MAIN);
+  lv_obj_set_style_border_color(home_tank_bar, C_LINE, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(home_tank_bar, C_STATUS, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(home_tank_bar, C_GREEN, LV_PART_INDICATOR);
+  lv_bar_set_range(home_tank_bar, 0, 100);
 
   // Prochaine dose
   home_next = mkLabel(p, "", &lv_font_montserrat_12, C_MUTED);

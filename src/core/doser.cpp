@@ -19,6 +19,10 @@ static float lastDoseVolume = 0.0f;
 static int   currentYday    = -1;
 static float histDays[6]    = {0};  // 6 journees terminees (h0=plus ancienne)
 
+// Cuve : capacite et volume consomme depuis le dernier remplissage.
+static float tankCapacityMl = TANK_CAPACITY_DEFAULT_L * 1000.0f;
+static float tankConsumedMl = 0.0f;
+
 static bool     pumpRunning = false;
 static uint32_t pumpStartMs = 0;
 static uint32_t pumpRunMs   = 0;
@@ -33,28 +37,45 @@ static void setPump(bool on) {
   relay_set(on);
 }
 
+static float tankPercent() {
+  if (tankCapacityMl <= 0.0f) return 0.0f;
+  float pct = (tankCapacityMl - tankConsumedMl) / tankCapacityMl * 100.0f;
+  if (pct < 0.0f)   pct = 0.0f;
+  if (pct > 100.0f) pct = 100.0f;
+  return pct;
+}
+
 static void registerInjection(float ml) {
   if (ml <= 0.0f) return;
   lastDoseVolume = ml;
   volumeToday   += ml;
   volumeTotal   += ml;
+  tankConsumedMl += ml;
   prefs.putFloat("volDay", volumeToday);
   prefs.putFloat("volTot", volumeTotal);
+  prefs.putFloat("tankUsed", tankConsumedMl);
   ui_setToday(volumeToday);
   net_publishVolumes(lastDoseVolume, volumeToday, volumeTotal);
-  Serial.printf("[Inj] %.2f ml (jour %.1f, total %.1f)\n", ml, volumeToday, volumeTotal);
+  net_publishTank(tankPercent());
+  Serial.printf("[Inj] %.2f ml (jour %.1f, total %.1f, cuve %.0f%%)\n",
+                ml, volumeToday, volumeTotal, tankPercent());
 }
 
-static void startDose() {
-  if (flowRate <= 0.0f || dosage <= 0.0f) return;
-  float mlCycle = dosage * (DOSE_INTERVAL_MS / 3600000.0f);  // ml a injecter ce cycle
-  float secs    = mlCycle / flowRate;
-  pumpRunMs = (uint32_t)(secs * 1000.0f + 0.5f);
+// Demarre la pompe pour injecter un volume cible (ml), selon le debit calibre.
+static void startDoseVolume(float ml) {
+  if (flowRate <= 0.0f || ml <= 0.0f) return;
+  pumpRunMs = (uint32_t)(ml / flowRate * 1000.0f + 0.5f);
   if (pumpRunMs == 0) return;
   setPump(true);
   pumpRunning = true;
   pumpStartMs = millis();
-  Serial.printf("[Dose] %.0f ml/h -> %.2f ml -> pompe %u ms\n", dosage, mlCycle, pumpRunMs);
+  Serial.printf("[Dose] cible %.2f ml -> pompe %u ms\n", ml, pumpRunMs);
+}
+
+// Dose automatique d'un cycle, calculee depuis le debit horaire regle.
+static void startDose() {
+  if (dosage <= 0.0f) return;
+  startDoseVolume(dosage * (DOSE_INTERVAL_MS / 3600000.0f));  // ml a injecter ce cycle
 }
 
 static void checkDailyReset() {
@@ -97,6 +118,8 @@ void doser_begin() {
     char k[4]; snprintf(k, sizeof(k), "h%d", i);
     histDays[i] = prefs.getFloat(k, 0.0f);
   }
+  tankCapacityMl = prefs.getFloat("tankCap",  TANK_CAPACITY_DEFAULT_L * 1000.0f);
+  tankConsumedMl = prefs.getFloat("tankUsed", 0.0f);
   lastDoseMs  = millis();  // premier cycle dans DOSE_INTERVAL_MS
 
   ui_setDosage(dosage);
@@ -137,8 +160,8 @@ int doser_secondsToNext() {
 
 void doser_triggerNow() {
   if (!calibrationMode && !pumpRunning) {
-    lastDoseMs = millis();
-    startDose();
+    lastDoseMs = millis();              // recale le prochain cycle automatique
+    startDoseVolume(MANUAL_DOSE_ML);    // injection manuelle d'un volume fixe
   }
 }
 
@@ -149,6 +172,26 @@ float doser_getLastVolume()  { return lastDoseVolume; }
 void doser_getWeek(float out[7]) {
   for (int i = 0; i < 6; i++) out[i] = histDays[i];
   out[6] = volumeToday;
+}
+
+// --- Cuve ---
+float doser_getTankPercent()   { return tankPercent(); }
+float doser_getTankCapacityL() { return tankCapacityMl / 1000.0f; }
+
+void doser_setTankCapacityL(float litres) {
+  if (litres < TANK_CAPACITY_MIN_L) litres = TANK_CAPACITY_MIN_L;
+  if (litres > TANK_CAPACITY_MAX_L) litres = TANK_CAPACITY_MAX_L;
+  tankCapacityMl = litres * 1000.0f;
+  prefs.putFloat("tankCap", tankCapacityMl);
+  net_publishTank(tankPercent());
+  Serial.printf("[Cuve] capacite = %.0f L (%.0f%%)\n", litres, tankPercent());
+}
+
+void doser_refillTank() {
+  tankConsumedMl = 0.0f;
+  prefs.putFloat("tankUsed", 0.0f);
+  net_publishTank(tankPercent());
+  Serial.println("[Cuve] remplie (100%)");
 }
 
 void doser_calibEnter() {

@@ -23,16 +23,13 @@ static void loadWifiCreds() {
 // --- Reception depuis l'app Blynk ---
 BLYNK_WRITE(VPIN_DOSAGE) { doser_setDosage(param.asFloat()); }
 
-BLYNK_WRITE(VPIN_MANUAL) {
-  if (param.asInt()) doser_triggerNow();
-}
-
 BLYNK_CONNECTED() {
   // (Re)synchronise l'app avec l'etat courant de l'appareil.
   Blynk.virtualWrite(VPIN_DOSAGE, doser_getDosage());
   Blynk.virtualWrite(VPIN_VOL_LAST, doser_getLastVolume());
   Blynk.virtualWrite(VPIN_VOL_DAY, doser_getVolumeToday());
   Blynk.virtualWrite(VPIN_VOL_TOTAL, doser_getVolumeTotal());
+  Blynk.virtualWrite(VPIN_TANK, doser_getTankPercent());
 }
 
 // --- API ---
@@ -88,18 +85,43 @@ void net_wifiIP(char *buf, size_t n) {
 }
 
 void net_publishDosage(float v) {
-  if (Blynk.connected()) Blynk.virtualWrite(VPIN_DOSAGE, v);
+  if (!Blynk.connected()) {
+    Serial.printf("[Blynk] dosage non publie (deconnecte) : %.0f ml/h\n", v);
+    return;
+  }
+  Blynk.virtualWrite(VPIN_DOSAGE, v);
+  Serial.printf("[Blynk] publie V0 (dosage) = %.0f ml/h\n", v);
 }
 
 void net_publishVolumes(float last, float today, float total) {
-  if (!Blynk.connected()) return;
+  if (!Blynk.connected()) {
+    Serial.printf("[Blynk] volumes non publies (deconnecte) : dernier=%.2f jour=%.2f total=%.2f\n",
+                  last, today, total);
+    return;
+  }
   Blynk.virtualWrite(VPIN_VOL_LAST, last);
   Blynk.virtualWrite(VPIN_VOL_DAY, today);
   Blynk.virtualWrite(VPIN_VOL_TOTAL, total);
+  Serial.printf("[Blynk] publie V2=%.2f V3=%.2f V4=%.2f ml (dernier/jour/total)\n",
+                last, today, total);
 }
 
 void net_publishVolumeDay(float today) {
-  if (Blynk.connected()) Blynk.virtualWrite(VPIN_VOL_DAY, today);
+  if (!Blynk.connected()) {
+    Serial.printf("[Blynk] volume du jour non publie (deconnecte) : %.2f ml\n", today);
+    return;
+  }
+  Blynk.virtualWrite(VPIN_VOL_DAY, today);
+  Serial.printf("[Blynk] publie V3 (jour) = %.2f ml\n", today);
+}
+
+void net_publishTank(float percent) {
+  if (!Blynk.connected()) {
+    Serial.printf("[Blynk] niveau cuve non publie (deconnecte) : %.0f%%\n", percent);
+    return;
+  }
+  Blynk.virtualWrite(VPIN_TANK, percent);
+  Serial.printf("[Blynk] publie V5 (cuve) = %.0f%%\n", percent);
 }
 
 void net_connectTo(const char *ssid, const char *pass) {

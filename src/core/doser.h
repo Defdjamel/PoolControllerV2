@@ -14,13 +14,19 @@ float doser_getDosage();
 float doser_getFlow();
 bool  doser_isPumping();
 int   doser_secondsToNext();
-void  doser_triggerNow();                  // force une injection (bouton Blynk)
+void  doser_triggerNow();                  // injection manuelle d'un volume fixe (MANUAL_DOSE_ML)
 
 // --- Historique des volumes ---
 float doser_getVolumeToday();
 float doser_getVolumeTotal();
 float doser_getLastVolume();
 void  doser_getWeek(float out[7]);  // out[0]=plus ancien ... out[6]=aujourd'hui
+
+// --- Cuve (reservoir de chlore) ---
+float doser_getTankPercent();          // % restant (0-100), derive de la conso depuis le remplissage
+float doser_getTankCapacityL();        // capacite configuree, en litres
+void  doser_setTankCapacityL(float litres);  // borne a [MIN, MAX], persiste
+void  doser_refillTank();              // marque la cuve comme pleine (conso = 0)
 
 // --- Calibration (pilotee par l'UI) ---
 void       doser_calibEnter();   // entre en mode calibration (stoppe le dosage)
