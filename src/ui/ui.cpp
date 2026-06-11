@@ -220,6 +220,12 @@ static void buildHomeTab(lv_obj_t *tab) {
   lbl_status = lv_label_create(tab);
   lv_label_set_text(lbl_status, "WiFi...");
   lv_obj_align(lbl_status, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+  lv_obj_t *lbl_ver = lv_label_create(tab);
+  lv_obj_set_style_text_font(lbl_ver, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl_ver, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_label_set_text(lbl_ver, "v" FIRMWARE_VERSION);
+  lv_obj_align(lbl_ver, LV_ALIGN_BOTTOM_RIGHT, -2, 0);
 }
 
 static void buildPumpTab(lv_obj_t *tab) {
