@@ -37,8 +37,12 @@ void ota_check() {
     WiFiClientSecure client;
     client.setInsecure();   // HTTPS sans validation du cert (RAM limitee)
 
+    // Parametre aleatoire pour contourner le cache CDN de raw.githubusercontent.com
+    String versionUrl = String(OTA_VERSION_URL) + "?t=" + String(millis());
+
     HTTPClient http;
-    if (!http.begin(client, OTA_VERSION_URL)) {
+    http.addHeader("Cache-Control", "no-cache, no-store");
+    if (!http.begin(client, versionUrl)) {
         Serial.println("[OTA] URL invalide");
         return;
     }
