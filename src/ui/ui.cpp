@@ -8,8 +8,9 @@
 #include "net/net_blynk.h"
 #include "config.h"
 
-// Index des onglets (ordre de creation)
-enum { TAB_HOME = 0, TAB_PUMP = 1, TAB_WIFI = 2 };
+// Onglets lateraux et sous-onglets de Reglages (ordre de creation)
+enum { TAB_HOME = 0, TAB_SETTINGS = 1 };
+enum { SUB_PUMP = 0, SUB_WIFI = 1 };
 
 static TFT_eSPI tft;
 static SPIClass touchSPI(HSPI);
@@ -18,7 +19,8 @@ static XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[SCREEN_WIDTH * 10];
 
-static lv_obj_t *tabview;
+static lv_obj_t *tabview;       // menu lateral (Home / Reglages)
+static lv_obj_t *settings_tv;   // tabview interne de Reglages (Pompe / WiFi)
 // Onglet HOME
 static lv_obj_t *lbl_dosage, *dosage_slider, *lbl_today, *lbl_next, *lbl_status;
 // Onglet POMPE
@@ -143,23 +145,32 @@ static void cb_calib_action(lv_event_t *) {
   calibRefresh();
 }
 
-// L'onglet "Pompe" prend la main sur le relais : on suspend le dosage en y entrant,
-// on le reprend en sortant.
-static void cb_tab_changed(lv_event_t *) {
-  uint16_t act = lv_tabview_get_tab_act(tabview);
-  if (act == TAB_PUMP) {
-    doser_calibEnter();
+// Synchronise l'etat materiel selon l'onglet (lateral) et le sous-onglet actifs :
+//  - sous-onglet Pompe : on prend la main sur le relais (calibration)
+//  - sous-onglet WiFi  : on lance un scan a l'arrivee
+// Appelee a chaque changement d'onglet, exterieur comme interieur.
+static void syncSettingsState() {
+  bool inSettings = (lv_tabview_get_tab_act(tabview) == TAB_SETTINGS);
+  uint16_t sub    = lv_tabview_get_tab_act(settings_tv);
+
+  if (inSettings && sub == SUB_PUMP) {
+    if (!doser_inCalibration()) doser_calibEnter();
     calibRefresh();
-  } else if (act == TAB_WIFI && !scan_triggered) {
-    net_scanStart();
-    lv_label_set_text(lbl_scan_st, "Scan...");
-    scan_triggered = true;
-    scan_start_ms  = millis();
   } else if (doser_inCalibration()) {
     doser_calibBack();
     refreshNext();
   }
+
+  if (inSettings && sub == SUB_WIFI && !scan_triggered) {
+    net_scanStart();
+    lv_label_set_text(lbl_scan_st, "Scan...");
+    scan_triggered = true;
+    scan_start_ms  = millis();
+  }
 }
+
+static void cb_tab_changed(lv_event_t *)          { syncSettingsState(); }
+static void cb_settings_tab_changed(lv_event_t *) { syncSettingsState(); }
 
 // ======================= Callbacks overlay WiFi =======================
 static void hideWifiOverlay() {
@@ -317,15 +328,25 @@ static void buildWifiTab(lv_obj_t *tab) {
   lv_obj_center(ld);
 }
 
+// Onglet "Reglages" : un tabview interne regroupe Pompe et WiFi.
+static void buildSettingsTab(lv_obj_t *tab) {
+  lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_pad_all(tab, 0, 0);
+
+  settings_tv = lv_tabview_create(tab, LV_DIR_TOP, 30);
+  buildPumpTab(lv_tabview_add_tab(settings_tv, "Pompe"));
+  buildWifiTab(lv_tabview_add_tab(settings_tv, "WiFi"));
+  lv_obj_add_event_cb(settings_tv, cb_settings_tab_changed, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
 static void buildWifiOverlay();
 static void buildOtaOverlay();  // declaration anticipee (definie apres buildUi)
 
 static void buildUi() {
   tabview = lv_tabview_create(lv_scr_act(), LV_DIR_LEFT, 74);
 
-  buildHomeTab(lv_tabview_add_tab(tabview, LV_SYMBOL_HOME "\nHome"));
-  buildPumpTab(lv_tabview_add_tab(tabview, LV_SYMBOL_SETTINGS "\nPompe"));
-  buildWifiTab(lv_tabview_add_tab(tabview, LV_SYMBOL_WIFI "\nWiFi"));
+  buildHomeTab(lv_tabview_add_tab(tabview, LV_SYMBOL_HOME));
+  buildSettingsTab(lv_tabview_add_tab(tabview, LV_SYMBOL_SETTINGS));
 
   lv_obj_add_event_cb(tabview, cb_tab_changed, LV_EVENT_VALUE_CHANGED, NULL);
   lv_tabview_set_act(tabview, TAB_HOME, LV_ANIM_OFF);
@@ -491,11 +512,11 @@ void ui_tick() {
   static uint32_t last = 0;
   if (millis() - last > 250) {
     last = millis();
-    switch (lv_tabview_get_tab_act(tabview)) {
-      case TAB_PUMP:
-        if (doser_calibState() == CAL_RUNNING) calibRefresh();  // chrono en direct
-        break;
-      case TAB_WIFI:
+    if (lv_tabview_get_tab_act(tabview) != TAB_SETTINGS) {
+      refreshNext();  // accueil : compte a rebours
+    } else if (lv_tabview_get_tab_act(settings_tv) == SUB_PUMP) {
+      if (doser_calibState() == CAL_RUNNING) calibRefresh();  // chrono en direct
+    } else {  // SUB_WIFI
         refreshWifi();
         if (scan_triggered) {
           int cnt = net_scanCount();
@@ -526,10 +547,6 @@ void ui_tick() {
             Serial.println("[SCAN] echec confirme apres 5s");
           }
         }
-        break;
-      default:
-        refreshNext();
-        break;
     }
     refreshStatus();
   }
