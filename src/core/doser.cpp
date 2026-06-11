@@ -17,6 +17,7 @@ static float volumeToday    = 0.0f;
 static float volumeTotal    = 0.0f;
 static float lastDoseVolume = 0.0f;
 static int   currentYday    = -1;
+static float histDays[6]    = {0};  // 6 journees terminees (h0=plus ancienne)
 
 static bool     pumpRunning = false;
 static uint32_t pumpStartMs = 0;
@@ -67,6 +68,13 @@ static void checkDailyReset() {
     return;
   }
   if (t.tm_yday != currentYday) {
+    // Archiver la journee ecoulee dans l'historique (decalage a gauche)
+    for (int i = 0; i < 5; i++) histDays[i] = histDays[i + 1];
+    histDays[5] = volumeToday;
+    for (int i = 0; i < 6; i++) {
+      char k[4]; snprintf(k, sizeof(k), "h%d", i);
+      prefs.putFloat(k, histDays[i]);
+    }
     currentYday = t.tm_yday;
     volumeToday = 0.0f;
     prefs.putFloat("volDay", 0.0f);
@@ -85,6 +93,10 @@ void doser_begin() {
   volumeToday = prefs.getFloat("volDay", 0.0f);
   volumeTotal = prefs.getFloat("volTot", 0.0f);
   currentYday = prefs.getInt("yday", -1);
+  for (int i = 0; i < 6; i++) {
+    char k[4]; snprintf(k, sizeof(k), "h%d", i);
+    histDays[i] = prefs.getFloat(k, 0.0f);
+  }
   lastDoseMs  = millis();  // premier cycle dans DOSE_INTERVAL_MS
 
   ui_setDosage(dosage);
@@ -133,6 +145,11 @@ void doser_triggerNow() {
 float doser_getVolumeToday() { return volumeToday; }
 float doser_getVolumeTotal() { return volumeTotal; }
 float doser_getLastVolume()  { return lastDoseVolume; }
+
+void doser_getWeek(float out[7]) {
+  for (int i = 0; i < 6; i++) out[i] = histDays[i];
+  out[6] = volumeToday;
+}
 
 void doser_calibEnter() {
   pumpRunning = false;

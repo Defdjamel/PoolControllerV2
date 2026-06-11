@@ -77,6 +77,16 @@ void net_reconnect() {
   WiFi.begin(wifiSsid, wifiPass);
 }
 
+bool net_wifiConnected() { return WiFi.status() == WL_CONNECTED; }
+
+void net_wifiSSID(char *buf, size_t n) {
+  strlcpy(buf, WiFi.SSID().c_str(), n);
+}
+
+void net_wifiIP(char *buf, size_t n) {
+  strlcpy(buf, WiFi.localIP().toString().c_str(), n);
+}
+
 void net_publishDosage(float v) {
   if (Blynk.connected()) Blynk.virtualWrite(VPIN_DOSAGE, v);
 }

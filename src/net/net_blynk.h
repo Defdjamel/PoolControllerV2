@@ -9,6 +9,9 @@ int  net_status();   // 0 = pas de WiFi, 1 = WiFi seul, 2 = Blynk connecte
 // Infos / actions WiFi (pour l'onglet reseau).
 void net_wifiInfo(char *buf, size_t n);
 void net_reconnect();
+bool net_wifiConnected();
+void net_wifiSSID(char *buf, size_t n);
+void net_wifiIP(char *buf, size_t n);
 
 // Publications (sans effet si Blynk n'est pas connecte).
 void net_publishDosage(float mlPerHour);

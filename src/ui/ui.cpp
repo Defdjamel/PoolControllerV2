@@ -1,49 +1,33 @@
+//
+// Coeur de l'UI : pilotes ecran/tactile LVGL, barre de statut, barre
+// d'onglets, navigation, overlay OTA et cycle de vie (ui_begin / ui_tick).
+// Le contenu de chaque ecran vit dans son propre module (ui_home, ui_flow,
+// ui_settings, ui_hist) ; les helpers de style dans ui_widgets.
+//
 #include <Arduino.h>
 #include <SPI.h>
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
-#include "ui/ui.h"
-#include "core/doser.h"
-#include "net/net_blynk.h"
-#include "config.h"
+#include "ui/ui_internal.h"
 
-// Onglets lateraux et sous-onglets de Reglages (ordre de creation)
-enum { TAB_HOME = 0, TAB_SETTINGS = 1 };
-enum { SUB_PUMP = 0, SUB_WIFI = 1 };
-
+// ======================= Pilotes ecran / tactile =======================
 static TFT_eSPI tft;
 static SPIClass touchSPI(HSPI);
 static XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
-
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[SCREEN_WIDTH * 10];
 
-static lv_obj_t *tabview;       // menu lateral (Home / Reglages)
-static lv_obj_t *settings_tv;   // tabview interne de Reglages (Pompe / WiFi)
-// Onglet HOME
-static lv_obj_t *lbl_dosage, *dosage_slider, *lbl_today, *lbl_next, *lbl_status;
-// Onglet POMPE
-static lv_obj_t *lbl_flow, *lbl_calib_info, *lbl_calib_time, *btn_action_label;
-// Onglet WIFI
-static lv_obj_t *lbl_wifi_status;
-static lv_obj_t *dd_networks;
-static lv_obj_t *lbl_scan_st;
-// Overlay saisie du mot de passe (enfant de lv_layer_top)
-static lv_obj_t *wifi_overlay;
-static lv_obj_t *lbl_ov_ssid;
-static lv_obj_t *ta_pwd;
-static lv_obj_t *lv_kbd;
+// ======================= Objets du cadre =======================
+static lv_obj_t *content;
+static lv_obj_t *pages[N_TABS];
+static int       curTab = T_HOME;
+// Barre de statut
+static lv_obj_t *sb_dot, *sb_state, *sb_wifi, *sb_clock;
+// Barre d'onglets
+static lv_obj_t *tabIcon[N_TABS], *tabText[N_TABS], *tabInd[N_TABS];
 // Overlay OTA
-static lv_obj_t *ota_overlay;
-static lv_obj_t *lbl_ota_ver;
-static lv_obj_t *bar_ota;
-static lv_obj_t *lbl_ota_pct;
-static lv_obj_t *lbl_ota_err;
-
-static bool      scan_triggered = false;
-static uint32_t  scan_start_ms  = 0;
-static char      pending_ssid[64];
+static lv_obj_t *ota_overlay, *lbl_ota_ver, *bar_ota, *lbl_ota_pct, *lbl_ota_err;
 
 // ======================= Pilotes LVGL =======================
 static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
@@ -56,11 +40,16 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
   lv_disp_flush_ready(disp);
 }
 
+#define TOUCH_DEBUG 0   // passer a 1 pour afficher les coordonnees brutes (calibration)
+
 static void touch_read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   if (ts.touched()) {
     TS_Point p = ts.getPoint();
     int16_t x = map(p.x, TS_MIN_X, TS_MAX_X, 0, SCREEN_WIDTH);
     int16_t y = map(p.y, TS_MIN_Y, TS_MAX_Y, 0, SCREEN_HEIGHT);
+#if TOUCH_DEBUG
+    Serial.printf("[Touch] brut x=%d y=%d -> %d,%d\n", p.x, p.y, x, y);
+#endif
     data->state = LV_INDEV_STATE_PR;
     data->point.x = constrain(x, 0, SCREEN_WIDTH - 1);
     data->point.y = constrain(y, 0, SCREEN_HEIGHT - 1);
@@ -69,292 +58,148 @@ static void touch_read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   }
 }
 
-// ======================= Setters (appeles par le doser) =======================
-void ui_setDosage(float v) {
-  lv_label_set_text_fmt(lbl_dosage, "%.0f ml/h", v);
-  if (dosage_slider) lv_slider_set_value(dosage_slider, (int)(v + 0.5f), LV_ANIM_OFF);
-}
-
-void ui_setFlow(float v) {
-  if (v > 0.0f) lv_label_set_text_fmt(lbl_flow, "Debit : %.2f ml/s", v);
-  else          lv_label_set_text(lbl_flow, "Debit : non calibre");
-}
-
-void ui_setToday(float v) { lv_label_set_text_fmt(lbl_today, "Aujourd'hui : %.0f ml", v); }
-
-// ======================= Rafraichissements internes =======================
-static void refreshNext() {
-  if (doser_getFlow() <= 0.0f)        lv_label_set_text(lbl_next, "Calibrez la pompe");
-  else if (doser_getDosage() <= 0.0f) lv_label_set_text(lbl_next, "Reglez le dosage");
-  else if (doser_isPumping())         lv_label_set_text(lbl_next, "Injection en cours...");
-  else {
-    int s = doser_secondsToNext();
-    lv_label_set_text_fmt(lbl_next, "Prochaine dose : %d:%02d", s / 60, s % 60);
-  }
-}
-
+// ======================= Barre de statut =======================
 static void refreshStatus() {
+  bool pumping = doser_isPumping();
+  lv_obj_set_style_bg_color(sb_dot, pumping ? C_GREEN : C_MUTED, 0);
+  lv_label_set_text(sb_state, pumping ? "DOSAGE" : "VEILLE");
+
   int s = net_status();
-  static int last = -1;
-  if (s == last) return;
-  last = s;
-  const char *txt = (s == 2) ? "Blynk : connecte"
-                  : (s == 1) ? "WiFi OK, Blynk..."
-                             : "WiFi...";
-  lv_palette_t pal = (s == 2) ? LV_PALETTE_GREEN
-                   : (s == 1) ? LV_PALETTE_ORANGE
-                              : LV_PALETTE_RED;
-  lv_label_set_text(lbl_status, txt);
-  lv_obj_set_style_text_color(lbl_status, lv_palette_main(pal), 0);
-}
+  lv_obj_set_style_text_color(sb_wifi, s >= 1 ? C_ACCENT : C_MUTED, 0);
 
-static void refreshWifi() {
-  char info[128];
-  net_wifiInfo(info, sizeof(info));
-  lv_label_set_text(lbl_wifi_status, info);
-}
-
-static void calibRefresh() {
-  switch (doser_calibState()) {
-    case CAL_READY:
-      lv_label_set_text(lbl_calib_info, "Placez un recipient de 100 ml sous la sortie.");
-      lv_label_set_text(lbl_calib_time, "0.0 s");
-      lv_label_set_text(btn_action_label, "Demarrer");
-      break;
-    case CAL_RUNNING:
-      lv_label_set_text(lbl_calib_info, "Arretez des que 100 ml sont atteints.");
-      lv_label_set_text_fmt(lbl_calib_time, "%.1f s", doser_calibElapsed());
-      lv_label_set_text(btn_action_label, "Arreter");
-      break;
-    case CAL_DONE:
-      lv_label_set_text_fmt(lbl_calib_info, "Debit mesure : %.2f ml/s", doser_getFlow());
-      lv_label_set_text(btn_action_label, "Refaire");
-      break;
+  time_t now = time(nullptr);
+  if (now > 1700000000) {
+    struct tm t; localtime_r(&now, &t);
+    lv_label_set_text_fmt(sb_clock, "%02d:%02d", t.tm_hour, t.tm_min);
+  } else {
+    lv_label_set_text(sb_clock, "--:--");
   }
 }
 
-// ======================= Evenements =======================
-static void cb_dosage_slider(lv_event_t *e) {
-  int v = lv_slider_get_value(lv_event_get_target(e));
-  doser_setDosage((float)v);   // met a jour l'etat + le label + le slider
-  net_publishDosage((float)v); // reflete le changement local vers l'app
+static void buildStatusBar(lv_obj_t *scr) {
+  lv_obj_t *sb = lv_obj_create(scr);
+  lv_obj_set_size(sb, PW, SB_H);
+  lv_obj_set_pos(sb, 0, 0);
+  lv_obj_set_style_bg_color(sb, C_STATUS, 0);
+  lv_obj_set_style_border_width(sb, 0, 0);
+  lv_obj_set_style_radius(sb, 0, 0);
+  lv_obj_set_style_pad_all(sb, 0, 0);
+  lv_obj_clear_flag(sb, LV_OBJ_FLAG_SCROLLABLE);
+
+  sb_dot = lv_obj_create(sb);
+  lv_obj_set_size(sb_dot, 6, 6);
+  lv_obj_set_style_radius(sb_dot, 3, 0);
+  lv_obj_set_style_border_width(sb_dot, 0, 0);
+  lv_obj_set_style_bg_color(sb_dot, C_MUTED, 0);
+  lv_obj_align(sb_dot, LV_ALIGN_LEFT_MID, 8, 0);
+  sb_state = mkLabel(sb, "VEILLE", &lv_font_montserrat_12, C_MUTED);
+  lv_obj_align(sb_state, LV_ALIGN_LEFT_MID, 20, 0);
+
+  sb_clock = mkLabel(sb, "--:--", &lv_font_montserrat_12, C_TEXT);
+  lv_obj_align(sb_clock, LV_ALIGN_RIGHT_MID, -8, 0);
+  sb_wifi = mkLabel(sb, LV_SYMBOL_WIFI, &lv_font_montserrat_14, C_MUTED);
+  lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -46, 0);
 }
 
-static void cb_calib_action(lv_event_t *) {
-  doser_calibAction();
-  calibRefresh();
-}
-
-// Synchronise l'etat materiel selon l'onglet (lateral) et le sous-onglet actifs :
-//  - sous-onglet Pompe : on prend la main sur le relais (calibration)
-//  - sous-onglet WiFi  : on lance un scan a l'arrivee
-// Appelee a chaque changement d'onglet, exterieur comme interieur.
-static void syncSettingsState() {
-  bool inSettings = (lv_tabview_get_tab_act(tabview) == TAB_SETTINGS);
-  uint16_t sub    = lv_tabview_get_tab_act(settings_tv);
-
-  if (inSettings && sub == SUB_PUMP) {
-    if (!doser_inCalibration()) doser_calibEnter();
-    calibRefresh();
-  } else if (doser_inCalibration()) {
-    doser_calibBack();
-    refreshNext();
+// ======================= Navigation =======================
+void setTab(int i) {
+  for (int k = 0; k < N_TABS; k++) {
+    bool act = (k == i);
+    lv_obj_set_style_text_color(tabIcon[k], act ? C_ACCENT : C_MUTED, 0);
+    lv_obj_set_style_text_color(tabText[k], act ? C_ACCENT : C_MUTED, 0);
+    lv_obj_set_width(tabInd[k], act ? 22 : 0);
+    if (act) lv_obj_clear_flag(pages[k], LV_OBJ_FLAG_HIDDEN);
+    else     lv_obj_add_flag(pages[k], LV_OBJ_FLAG_HIDDEN);
   }
+  curTab = i;
 
-  if (inSettings && sub == SUB_WIFI && !scan_triggered) {
-    net_scanStart();
-    lv_label_set_text(lbl_scan_st, "Scan...");
-    scan_triggered = true;
-    scan_start_ms  = millis();
+  if (i == T_FLOW) flowEnter();
+  if (i == T_HIST) refreshHist();
+  if (i == T_HOME) refreshHome();
+  syncSettings(curTab == T_SETTINGS);   // calibration / scan WiFi selon Reglages
+}
+
+static void cb_tab(lv_event_t *e) { setTab((int)(intptr_t)lv_event_get_user_data(e)); }
+
+static void buildTabBar(lv_obj_t *scr) {
+  static const char *icons[N_TABS] = {
+    LV_SYMBOL_HOME, LV_SYMBOL_TINT, LV_SYMBOL_SETTINGS, LV_SYMBOL_LIST
+  };
+  static const char *texts[N_TABS] = { "Accueil", "Debit", "Reglages", "Histo" };
+
+  lv_obj_t *tb = lv_obj_create(scr);
+  lv_obj_set_size(tb, PW, TB_H);
+  lv_obj_set_pos(tb, 0, SCREEN_HEIGHT - TB_H);
+  lv_obj_set_style_bg_color(tb, C_STATUS, 0);
+  lv_obj_set_style_border_color(tb, lv_color_hex(0x0e2236), 0);
+  lv_obj_set_style_border_width(tb, 1, 0);
+  lv_obj_set_style_border_side(tb, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_radius(tb, 0, 0);
+  lv_obj_set_style_pad_all(tb, 0, 0);
+  lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
+
+  int tw = PW / N_TABS;
+  for (int i = 0; i < N_TABS; i++) {
+    lv_obj_t *t = lv_obj_create(tb);
+    lv_obj_set_size(t, tw, TB_H);
+    lv_obj_set_pos(t, i * tw, 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(t, 0, 0);
+    lv_obj_set_style_pad_all(t, 0, 0);
+    lv_obj_set_style_radius(t, 0, 0);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(t, cb_tab, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+    tabInd[i] = lv_obj_create(t);
+    lv_obj_set_size(tabInd[i], 0, 3);
+    lv_obj_set_style_radius(tabInd[i], 2, 0);
+    lv_obj_set_style_border_width(tabInd[i], 0, 0);
+    lv_obj_set_style_bg_color(tabInd[i], C_ACCENT, 0);
+    lv_obj_align(tabInd[i], LV_ALIGN_TOP_MID, 0, 0);
+
+    tabIcon[i] = mkLabel(t, icons[i], &lv_font_montserrat_16, C_MUTED);
+    lv_obj_align(tabIcon[i], LV_ALIGN_TOP_MID, 0, 7);
+    tabText[i] = mkLabel(t, texts[i], &lv_font_montserrat_12, C_MUTED);
+    lv_obj_align(tabText[i], LV_ALIGN_BOTTOM_MID, 0, -4);
   }
 }
 
-static void cb_tab_changed(lv_event_t *)          { syncSettingsState(); }
-static void cb_settings_tab_changed(lv_event_t *) { syncSettingsState(); }
+// ======================= Overlay OTA =======================
+static void buildOtaOverlay() {
+  ota_overlay = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(ota_overlay, SCREEN_WIDTH, SCREEN_HEIGHT);
+  lv_obj_set_pos(ota_overlay, 0, 0);
+  lv_obj_set_style_bg_color(ota_overlay, C_BG, 0);
+  lv_obj_set_style_bg_opa(ota_overlay, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(ota_overlay, 0, 0);
+  lv_obj_set_style_radius(ota_overlay, 0, 0);
+  lv_obj_clear_flag(ota_overlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ota_overlay, LV_OBJ_FLAG_HIDDEN);
 
-// ======================= Callbacks overlay WiFi =======================
-static void hideWifiOverlay() {
-  lv_keyboard_set_textarea(lv_kbd, NULL);
-  lv_obj_add_flag(wifi_overlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t *title = mkLabel(ota_overlay, LV_SYMBOL_DOWNLOAD " Mise a jour", &lv_font_montserrat_22, C_TEXT);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 26);
+
+  lbl_ota_ver = mkLabel(ota_overlay, "", &lv_font_montserrat_16, C_ACCENT);
+  lv_obj_align(lbl_ota_ver, LV_ALIGN_TOP_MID, 0, 62);
+
+  bar_ota = lv_bar_create(ota_overlay);
+  lv_obj_set_size(bar_ota, 280, 20);
+  lv_obj_align(bar_ota, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(bar_ota, C_SURFACE2, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(bar_ota, C_ACCENT, LV_PART_INDICATOR);
+  lv_bar_set_range(bar_ota, 0, 100);
+
+  lbl_ota_pct = mkLabel(ota_overlay, "0 %", &lv_font_montserrat_16, C_TEXT);
+  lv_obj_align(lbl_ota_pct, LV_ALIGN_CENTER, 0, 28);
+
+  lbl_ota_err = mkLabel(ota_overlay, "", &lv_font_montserrat_12, C_RED);
+  lv_obj_align(lbl_ota_err, LV_ALIGN_BOTTOM_MID, 0, -34);
+
+  lv_obj_t *warn = mkLabel(ota_overlay, LV_SYMBOL_WARNING " Ne pas couper l'alimentation", &lv_font_montserrat_12, C_AMBER);
+  lv_obj_align(warn, LV_ALIGN_BOTTOM_MID, 0, -12);
 }
 
-static void cb_ov_ok(lv_event_t *) {
-  const char *pass = lv_textarea_get_text(ta_pwd);
-  net_connectTo(pending_ssid, pass);
-  hideWifiOverlay();
-}
-
-static void cb_ov_cancel(lv_event_t *) { hideWifiOverlay(); }
-
-static void cb_wifi_connect(lv_event_t *) {
-  char ssid[64];
-  lv_dropdown_get_selected_str(dd_networks, ssid, sizeof(ssid));
-  if (ssid[0] == '\0' || ssid[0] == '-') return;  // rien de selectionne
-  strlcpy(pending_ssid, ssid, sizeof(pending_ssid));
-  char buf[80];
-  snprintf(buf, sizeof(buf), "SSID : %s", ssid);
-  lv_label_set_text(lbl_ov_ssid, buf);
-  lv_textarea_set_text(ta_pwd, "");
-  lv_obj_clear_flag(wifi_overlay, LV_OBJ_FLAG_HIDDEN);
-  lv_keyboard_set_textarea(lv_kbd, ta_pwd);
-}
-
-static void cb_wifi_disconnect(lv_event_t *) { net_disconnect(); }
-
-static void cb_wifi_scan(lv_event_t *) {
-  net_scanStart();
-  lv_label_set_text(lbl_scan_st, "Scan...");
-  scan_triggered = true;
-  scan_start_ms  = millis();
-}
-
-// ======================= Construction de l'UI =======================
-static void buildHomeTab(lv_obj_t *tab) {
-  lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *title = lv_label_create(tab);
-  lv_label_set_text(title, "Dosage");
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
-
-  lbl_dosage = lv_label_create(tab);
-  lv_obj_set_style_text_font(lbl_dosage, &lv_font_montserrat_22, 0);
-  lv_label_set_text(lbl_dosage, "0 ml/h");
-  lv_obj_align(lbl_dosage, LV_ALIGN_TOP_MID, 0, 24);
-
-  dosage_slider = lv_slider_create(tab);
-  lv_obj_set_width(dosage_slider, 190);
-  lv_slider_set_range(dosage_slider, 0, DOSAGE_MAX_ML_H);
-  lv_obj_align(dosage_slider, LV_ALIGN_TOP_MID, 0, 66);
-  lv_obj_add_event_cb(dosage_slider, cb_dosage_slider, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lbl_today = lv_label_create(tab);
-  lv_label_set_text(lbl_today, "Aujourd'hui : 0 ml");
-  lv_obj_align(lbl_today, LV_ALIGN_TOP_MID, 0, 96);
-
-  lbl_next = lv_label_create(tab);
-  lv_label_set_text(lbl_next, "");
-  lv_obj_align(lbl_next, LV_ALIGN_TOP_MID, 0, 122);
-
-  lbl_status = lv_label_create(tab);
-  lv_label_set_text(lbl_status, "WiFi...");
-  lv_obj_align(lbl_status, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-  lv_obj_t *lbl_ver = lv_label_create(tab);
-  lv_obj_set_style_text_font(lbl_ver, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(lbl_ver, lv_palette_main(LV_PALETTE_GREY), 0);
-  lv_label_set_text(lbl_ver, "v" FIRMWARE_VERSION);
-  lv_obj_align(lbl_ver, LV_ALIGN_BOTTOM_RIGHT, -2, 0);
-}
-
-static void buildPumpTab(lv_obj_t *tab) {
-  lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
-
-  lbl_flow = lv_label_create(tab);
-  lv_obj_set_style_text_font(lbl_flow, &lv_font_montserrat_16, 0);
-  lv_label_set_text(lbl_flow, "Debit : non calibre");
-  lv_obj_align(lbl_flow, LV_ALIGN_TOP_MID, 0, 0);
-
-  lbl_calib_info = lv_label_create(tab);
-  lv_label_set_long_mode(lbl_calib_info, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(lbl_calib_info, 220);
-  lv_obj_set_style_text_align(lbl_calib_info, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_text(lbl_calib_info, "Placez un recipient de 100 ml sous la sortie.");
-  lv_obj_align(lbl_calib_info, LV_ALIGN_TOP_MID, 0, 28);
-
-  lbl_calib_time = lv_label_create(tab);
-  lv_obj_set_style_text_font(lbl_calib_time, &lv_font_montserrat_22, 0);
-  lv_label_set_text(lbl_calib_time, "0.0 s");
-  lv_obj_align(lbl_calib_time, LV_ALIGN_CENTER, 0, 5);
-
-  lv_obj_t *btn = lv_btn_create(tab);
-  lv_obj_set_size(btn, 150, 44);
-  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -4);
-  lv_obj_add_event_cb(btn, cb_calib_action, LV_EVENT_CLICKED, NULL);
-  btn_action_label = lv_label_create(btn);
-  lv_label_set_text(btn_action_label, "Demarrer");
-  lv_obj_center(btn_action_label);
-}
-
-static void buildWifiTab(lv_obj_t *tab) {
-  lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_pad_all(tab, 4, 0);
-
-  // Etat de la connexion actuelle
-  lbl_wifi_status = lv_label_create(tab);
-  lv_obj_set_style_text_font(lbl_wifi_status, &lv_font_montserrat_14, 0);
-  lv_label_set_long_mode(lbl_wifi_status, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(lbl_wifi_status, 230);
-  lv_label_set_text(lbl_wifi_status, "WiFi...");
-  lv_obj_align(lbl_wifi_status, LV_ALIGN_TOP_LEFT, 0, 0);
-
-  // Dropdown des reseaux
-  dd_networks = lv_dropdown_create(tab);
-  lv_obj_set_width(dd_networks, 155);
-  lv_dropdown_set_options(dd_networks, "---");
-  lv_obj_align(dd_networks, LV_ALIGN_TOP_LEFT, 0, 72);
-
-  // Bouton Scan
-  lv_obj_t *btn_scan = lv_btn_create(tab);
-  lv_obj_set_size(btn_scan, 68, 32);
-  lv_obj_align(btn_scan, LV_ALIGN_TOP_LEFT, 159, 72);
-  lv_obj_add_event_cb(btn_scan, cb_wifi_scan, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *ls = lv_label_create(btn_scan);
-  lv_label_set_text(ls, "Scan");
-  lv_obj_center(ls);
-
-  // Statut du scan
-  lbl_scan_st = lv_label_create(tab);
-  lv_obj_set_style_text_font(lbl_scan_st, &lv_font_montserrat_14, 0);
-  lv_label_set_text(lbl_scan_st, "");
-  lv_obj_align(lbl_scan_st, LV_ALIGN_TOP_LEFT, 0, 110);
-
-  // Bouton Connecter
-  lv_obj_t *btn_conn = lv_btn_create(tab);
-  lv_obj_set_size(btn_conn, 108, 34);
-  lv_obj_align(btn_conn, LV_ALIGN_BOTTOM_LEFT, 0, -2);
-  lv_obj_add_event_cb(btn_conn, cb_wifi_connect, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lc = lv_label_create(btn_conn);
-  lv_label_set_text(lc, "Connecter");
-  lv_obj_center(lc);
-
-  // Bouton Deconnecter
-  lv_obj_t *btn_disc = lv_btn_create(tab);
-  lv_obj_set_size(btn_disc, 116, 34);
-  lv_obj_set_style_bg_color(btn_disc, lv_palette_main(LV_PALETTE_RED), 0);
-  lv_obj_align(btn_disc, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-  lv_obj_add_event_cb(btn_disc, cb_wifi_disconnect, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *ld = lv_label_create(btn_disc);
-  lv_label_set_text(ld, "Deconnecter");
-  lv_obj_center(ld);
-}
-
-// Onglet "Reglages" : un tabview interne regroupe Pompe et WiFi.
-static void buildSettingsTab(lv_obj_t *tab) {
-  lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_pad_all(tab, 0, 0);
-
-  settings_tv = lv_tabview_create(tab, LV_DIR_TOP, 30);
-  buildPumpTab(lv_tabview_add_tab(settings_tv, "Pompe"));
-  buildWifiTab(lv_tabview_add_tab(settings_tv, "WiFi"));
-  lv_obj_add_event_cb(settings_tv, cb_settings_tab_changed, LV_EVENT_VALUE_CHANGED, NULL);
-}
-
-static void buildWifiOverlay();
-static void buildOtaOverlay();  // declaration anticipee (definie apres buildUi)
-
-static void buildUi() {
-  tabview = lv_tabview_create(lv_scr_act(), LV_DIR_LEFT, 74);
-
-  buildHomeTab(lv_tabview_add_tab(tabview, LV_SYMBOL_HOME));
-  buildSettingsTab(lv_tabview_add_tab(tabview, LV_SYMBOL_SETTINGS));
-
-  lv_obj_add_event_cb(tabview, cb_tab_changed, LV_EVENT_VALUE_CHANGED, NULL);
-  lv_tabview_set_act(tabview, TAB_HOME, LV_ANIM_OFF);
-  buildWifiOverlay();
-  buildOtaOverlay();
-}
-
-// ======================= OTA overlay =======================
 void ui_otaBegin(const char *version) {
   lv_label_set_text_fmt(lbl_ota_ver, "Installation de v%s", version);
   lv_bar_set_value(bar_ota, 0, LV_ANIM_OFF);
@@ -363,130 +208,65 @@ void ui_otaBegin(const char *version) {
   lv_obj_clear_flag(ota_overlay, LV_OBJ_FLAG_HIDDEN);
   lv_timer_handler();
 }
-
 void ui_otaProgress(int pct) {
   lv_bar_set_value(bar_ota, pct, LV_ANIM_OFF);
   lv_label_set_text_fmt(lbl_ota_pct, "%d %%", pct);
   lv_timer_handler();
 }
-
 void ui_otaError(const char *msg) {
   lv_label_set_text(lbl_ota_err, msg);
   lv_timer_handler();
 }
 
-static void buildOtaOverlay() {
-  ota_overlay = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(ota_overlay, 320, 240);
-  lv_obj_set_pos(ota_overlay, 0, 0);
-  lv_obj_set_style_bg_color(ota_overlay, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(ota_overlay, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(ota_overlay, 0, 0);
-  lv_obj_clear_flag(ota_overlay, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(ota_overlay, LV_OBJ_FLAG_HIDDEN);
+// ======================= Assemblage =======================
+static void buildUi() {
+  lv_obj_t *scr = lv_scr_act();
+  lv_obj_set_style_bg_color(scr, C_BG, 0);
+  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *title = lv_label_create(ota_overlay);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_label_set_text(title, LV_SYMBOL_DOWNLOAD " Mise a jour");
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
+  buildStatusBar(scr);
 
-  lbl_ota_ver = lv_label_create(ota_overlay);
-  lv_obj_set_style_text_font(lbl_ota_ver, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(lbl_ota_ver, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
-  lv_label_set_text(lbl_ota_ver, "");
-  lv_obj_align(lbl_ota_ver, LV_ALIGN_TOP_MID, 0, 66);
+  content = lv_obj_create(scr);
+  lv_obj_set_size(content, PW, PH);
+  lv_obj_set_pos(content, 0, SB_H);
+  lv_obj_set_style_bg_color(content, C_BG, 0);
+  lv_obj_set_style_border_width(content, 0, 0);
+  lv_obj_set_style_radius(content, 0, 0);
+  lv_obj_set_style_pad_all(content, 0, 0);
+  lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
 
-  bar_ota = lv_bar_create(ota_overlay);
-  lv_obj_set_size(bar_ota, 280, 22);
-  lv_bar_set_range(bar_ota, 0, 100);
-  lv_bar_set_value(bar_ota, 0, LV_ANIM_OFF);
-  lv_obj_align(bar_ota, LV_ALIGN_CENTER, 0, -10);
+  for (int i = 0; i < N_TABS; i++) {
+    pages[i] = lv_obj_create(content);
+    lv_obj_set_size(pages[i], PW, PH);
+    lv_obj_set_pos(pages[i], 0, 0);
+    lv_obj_set_style_bg_color(pages[i], C_BG, 0);
+    lv_obj_set_style_border_width(pages[i], 0, 0);
+    lv_obj_set_style_radius(pages[i], 0, 0);
+    lv_obj_set_style_pad_all(pages[i], 0, 0);   // marges gerees par chaque ecran (x=8)
+    lv_obj_clear_flag(pages[i], LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+  }
+  buildHome(pages[T_HOME]);
+  buildFlow(pages[T_FLOW]);
+  buildSettings(pages[T_SETTINGS]);   // construit aussi son overlay mot de passe
+  buildHist(pages[T_HIST]);
 
-  lbl_ota_pct = lv_label_create(ota_overlay);
-  lv_obj_set_style_text_color(lbl_ota_pct, lv_color_white(), 0);
-  lv_label_set_text(lbl_ota_pct, "0 %");
-  lv_obj_align(lbl_ota_pct, LV_ALIGN_CENTER, 0, 22);
+  buildTabBar(scr);
+  buildOtaOverlay();
 
-  lbl_ota_err = lv_label_create(ota_overlay);
-  lv_obj_set_style_text_font(lbl_ota_err, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(lbl_ota_err, lv_palette_main(LV_PALETTE_RED), 0);
-  lv_label_set_text(lbl_ota_err, "");
-  lv_obj_align(lbl_ota_err, LV_ALIGN_BOTTOM_MID, 0, -36);
-
-  lv_obj_t *warn = lv_label_create(ota_overlay);
-  lv_obj_set_style_text_font(warn, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(warn, lv_palette_main(LV_PALETTE_ORANGE), 0);
-  lv_label_set_text(warn, LV_SYMBOL_WARNING " Ne pas couper l'alimentation");
-  lv_obj_align(warn, LV_ALIGN_BOTTOM_MID, 0, -12);
-}
-
-static void buildWifiOverlay() {
-  wifi_overlay = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(wifi_overlay, 320, 240);
-  lv_obj_set_pos(wifi_overlay, 0, 0);
-  lv_obj_set_style_bg_color(wifi_overlay, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(wifi_overlay, LV_OPA_90, 0);
-  lv_obj_set_style_border_width(wifi_overlay, 0, 0);
-  lv_obj_set_style_pad_all(wifi_overlay, 0, 0);
-  lv_obj_clear_flag(wifi_overlay, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(wifi_overlay, LV_OBJ_FLAG_HIDDEN);
-
-  // Clavier en bas (145 px de haut)
-  lv_kbd = lv_keyboard_create(wifi_overlay);
-  lv_obj_set_size(lv_kbd, 320, 145);
-  lv_obj_align(lv_kbd, LV_ALIGN_BOTTOM_MID, 0, 0);
-  // Le clavier OK (coche) valide aussi la connexion
-  lv_obj_add_event_cb(lv_kbd, [](lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_READY)   cb_ov_ok(NULL);
-    if (lv_event_get_code(e) == LV_EVENT_CANCEL)  cb_ov_cancel(NULL);
-  }, LV_EVENT_ALL, NULL);
-
-  // SSID selectionne
-  lbl_ov_ssid = lv_label_create(wifi_overlay);
-  lv_obj_set_style_text_font(lbl_ov_ssid, &lv_font_montserrat_14, 0);
-  lv_label_set_text(lbl_ov_ssid, "SSID : ...");
-  lv_obj_set_pos(lbl_ov_ssid, 6, 4);
-
-  // Champ mot de passe (mode masque)
-  ta_pwd = lv_textarea_create(wifi_overlay);
-  lv_textarea_set_one_line(ta_pwd, true);
-  lv_textarea_set_password_mode(ta_pwd, true);
-  lv_textarea_set_placeholder_text(ta_pwd, "Mot de passe");
-  lv_obj_set_size(ta_pwd, 312, 34);
-  lv_obj_set_pos(ta_pwd, 4, 24);
-
-  // Bouton OK
-  lv_obj_t *btn_ok = lv_btn_create(wifi_overlay);
-  lv_obj_set_size(btn_ok, 150, 30);
-  lv_obj_set_pos(btn_ok, 4, 62);
-  lv_obj_add_event_cb(btn_ok, cb_ov_ok, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lok = lv_label_create(btn_ok);
-  lv_label_set_text(lok, "OK");
-  lv_obj_center(lok);
-
-  // Bouton Annuler
-  lv_obj_t *btn_ann = lv_btn_create(wifi_overlay);
-  lv_obj_set_size(btn_ann, 150, 30);
-  lv_obj_set_pos(btn_ann, 162, 62);
-  lv_obj_set_style_bg_color(btn_ann, lv_palette_main(LV_PALETTE_GREY), 0);
-  lv_obj_add_event_cb(btn_ann, cb_ov_cancel, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lann = lv_label_create(btn_ann);
-  lv_label_set_text(lann, "Annuler");
-  lv_obj_center(lann);
+  setTab(T_HOME);
 }
 
 // ======================= API =======================
 void ui_begin() {
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(0);   // portrait 240x320
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
 
-  // Tactile (HSPI) -> il FAUT passer touchSPI a begin()
   touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
   ts.begin(touchSPI);
-  ts.setRotation(1);
+  ts.setRotation(0);
 
   lv_init();
   lv_disp_draw_buf_init(&draw_buf, buf, NULL, SCREEN_WIDTH * 10);
@@ -512,43 +292,11 @@ void ui_tick() {
   static uint32_t last = 0;
   if (millis() - last > 250) {
     last = millis();
-    if (lv_tabview_get_tab_act(tabview) != TAB_SETTINGS) {
-      refreshNext();  // accueil : compte a rebours
-    } else if (lv_tabview_get_tab_act(settings_tv) == SUB_PUMP) {
-      if (doser_calibState() == CAL_RUNNING) calibRefresh();  // chrono en direct
-    } else {  // SUB_WIFI
-        refreshWifi();
-        if (scan_triggered) {
-          int cnt = net_scanCount();
-          static int last_cnt = -99;
-          if (cnt != last_cnt) {
-            Serial.printf("[SCAN] scanComplete=%d elapsed=%lums\n", cnt, millis() - scan_start_ms);
-            last_cnt = cnt;
-          }
-          if (cnt >= 0) {
-            last_cnt = -99;
-            scan_triggered = false;
-            char opts[512] = "";
-            for (int i = 0; i < cnt && i < 12; i++) {
-              char ssid[64];
-              net_scanGetSSID(i, ssid, sizeof(ssid));
-              Serial.printf("[SCAN]   %d: %s (%d dBm)\n", i, ssid, net_scanGetRSSI(i));
-              if (i > 0) strncat(opts, "\n", sizeof(opts) - strlen(opts) - 1);
-              strncat(opts, ssid, sizeof(opts) - strlen(opts) - 1);
-            }
-            lv_dropdown_set_options(dd_networks, cnt > 0 ? opts : "---");
-            char st[24];
-            snprintf(st, sizeof(st), cnt > 0 ? "%d reseaux" : "Aucun reseau", cnt);
-            lv_label_set_text(lbl_scan_st, st);
-          } else if (cnt == -2 && millis() - scan_start_ms > 5000) {
-            last_cnt = -99;
-            scan_triggered = false;
-            lv_label_set_text(lbl_scan_st, "Echec - reessayez");
-            Serial.println("[SCAN] echec confirme apres 5s");
-          }
-        }
-    }
     refreshStatus();
+    switch (curTab) {
+      case T_HOME:     refreshHome();     break;
+      case T_SETTINGS: ui_settingsTick(); break;
+    }
   }
   lv_timer_handler();
 }

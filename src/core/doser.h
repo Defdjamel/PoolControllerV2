@@ -20,6 +20,7 @@ void  doser_triggerNow();                  // force une injection (bouton Blynk)
 float doser_getVolumeToday();
 float doser_getVolumeTotal();
 float doser_getLastVolume();
+void  doser_getWeek(float out[7]);  // out[0]=plus ancien ... out[6]=aujourd'hui
 
 // --- Calibration (pilotee par l'UI) ---
 void       doser_calibEnter();   // entre en mode calibration (stoppe le dosage)

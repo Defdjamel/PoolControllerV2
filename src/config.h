@@ -6,8 +6,8 @@
 #define RELAY_ACTIVE_HIGH  1    // 1 = actif a l'etat HAUT ; 0 = actif a l'etat BAS
 
 // ======================= ECRAN / TACTILE (CYD) =======================
-static const uint16_t SCREEN_WIDTH  = 320;
-static const uint16_t SCREEN_HEIGHT = 240;
+static const uint16_t SCREEN_WIDTH  = 240;   // portrait
+static const uint16_t SCREEN_HEIGHT = 320;
 
 #define XPT2046_IRQ  36
 #define XPT2046_MOSI 32
@@ -29,7 +29,7 @@ static const char TZ_INFO[]    = "CET-1CEST,M3.5.0,M10.5.0/3";  // Europe/Paris
 static const char NTP_SERVER[] = "pool.ntp.org";
 
 // ======================= OTA =======================
-#define FIRMWARE_VERSION  "1.0.8"
+#define FIRMWARE_VERSION  "1.0.9"
 #define OTA_VERSION_URL   "https://raw.githubusercontent.com/Defdjamel/PoolControllerV2/main/firmware/version.json"
 
 // ======================= BLYNK : virtual pins =======================
